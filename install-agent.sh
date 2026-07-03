@@ -1,6 +1,6 @@
 #!/bin/bash
 # Nexus Agent Installer
-# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/TIUCSIB/nexus/main/scripts/install-agent.sh) --panel https://panel.com --token YOUR_TOKEN
+# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/TIUCSIB/nexus-install/master/install-agent.sh) --panel URL --token TOKEN
 set -e
 
 red='\033[0;31m'
@@ -10,7 +10,7 @@ cyan='\033[0;36m'
 plain='\033[0m'
 
 install_dir="/opt/nexus-agent"
-github_repo="TIUCSIB/nexus"
+github_repo="TIUCSIB/nexus-install"
 panel_url=""
 token=""
 node_name="node-1"

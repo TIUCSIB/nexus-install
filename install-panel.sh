@@ -1,6 +1,6 @@
 #!/bin/bash
 # Nexus Panel Installer
-# Usage: bash <(curl -fsSL URL) [--port 6100] [--dir /opt/nexus]
+# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/TIUCSIB/nexus-install/master/install-panel.sh) [--port 6100]
 set -e
 
 red='\033[0;31m'
@@ -11,7 +11,7 @@ plain='\033[0m'
 
 cur_dir=$(pwd)
 install_dir="/opt/nexus"
-github_repo="TIUCSIB/nexus"
+github_repo="TIUCSIB/nexus-install"
 port=6100
 
 while [[ $# -gt 0 ]]; do
