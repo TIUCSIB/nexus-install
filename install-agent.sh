@@ -1,6 +1,6 @@
 #!/bin/bash
 # Nexus Agent Installer
-# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/TIUCSIB/nexus-install/main/install-agent.sh) --panel URL --token TOKEN --node-id ID
+# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/TIUCSIB/nexus-install/master/install-agent.sh) --panel URL --token TOKEN --node-id ID
 set -e
 
 red='\033[0;31m'
