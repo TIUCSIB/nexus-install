@@ -63,7 +63,7 @@ echo ""
 if [[ x"${release}" == x"centos" ]]; then
     yum install -y wget curl ca-certificates socat >/dev/null 2>&1
 elif [[ x"${release}" == x"alpine" ]]; then
-    apk add --no-cache wget curl ca-certificates socat >/dev/null 2>&1
+    apk add --no-cache wget curl ca-certificates socat unzip github-cli >/dev/null 2>&1
 else
     apt-get update -y >/dev/null 2>&1
     apt-get install -y wget curl ca-certificates socat unzip >/dev/null 2>&1
@@ -72,7 +72,7 @@ fi
 # Install sing-box
 if ! command -v sing-box &>/dev/null; then
     echo -e "  Installing sing-box..."
-    sb_ver=$(curl -Ls "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+    sb_ver=$(curl -sL "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
     if [[ -n "${sb_ver}" ]]; then
         wget --no-check-certificate -q -O /tmp/sb.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${sb_ver}/sing-box-${sb_ver}-linux-${arch}.tar.gz" 2>/dev/null
         if [[ $? -eq 0 ]]; then
@@ -87,33 +87,50 @@ else
     echo -e "  sing-box: ${green}installed${plain}"
 fi
 
-# 获取最新版本号（多种方式）
+# 获取最新版本号
 get_latest_version() {
     local ver=""
     if command -v gh &>/dev/null; then
         ver=$(gh release list -R "${github_repo}" --json tagName -q '.[0].tagName' 2>/dev/null || true)
     fi
     if [[ -z "${ver}" ]]; then
-        ver=$(curl -sL "https://api.github.com/repos/${github_repo}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null || true)
+        ver=$(curl -sL "https://api.github.com/repos/${github_repo}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/' 2>/dev/null || true)
     fi
     echo "${ver}"
 }
 
-# 下载文件（多种方式）
+# 下载文件
 download_file() {
     local name="$1"
     local output="$2"
     local ver="${3:-$(get_latest_version)}"
-    local url="https://github.com/${github_repo}/releases/download/${ver}/${name}"
 
-    if command -v gh &>/dev/null; then
-        if gh release download "${ver}" -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null; then
-            if [[ -s "${output}" ]]; then return 0; fi
-        fi
+    if [[ -n "${ver}" ]]; then
+        echo -e "  Version: ${green}${ver}${plain}"
     fi
 
-    local api_url="https://api.github.com/repos/${github_repo}/releases/tags/${ver}"
-    local asset_id=$(curl -sL "${api_url}" | grep -A20 "\"name\": \"${name}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/' 2>/dev/null || true)
+    # 方法1: gh CLI
+    if command -v gh &>/dev/null; then
+        echo -e "  Downloading via gh CLI..."
+        if [[ -n "${ver}" ]]; then
+            gh release download "${ver}" -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null
+        else
+            gh release download -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null
+        fi
+        if [[ $? -eq 0 && -s "${output}" ]]; then return 0; fi
+    fi
+
+    # 方法2: API
+    echo -e "  Downloading via API..."
+    local api_url asset_id
+    if [[ -n "${ver}" ]]; then
+        api_url="https://api.github.com/repos/${github_repo}/releases/tags/v${ver}"
+        asset_id=$(curl -sL "${api_url}" 2>/dev/null | grep -A20 "\"name\": \"${name}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/')
+    fi
+    if [[ -z "${asset_id}" ]]; then
+        api_url="https://api.github.com/repos/${github_repo}/releases/latest"
+        asset_id=$(curl -sL "${api_url}" 2>/dev/null | grep -A20 "\"name\": \"${name}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/')
+    fi
     if [[ -n "${asset_id}" ]]; then
         curl -sL -H "Accept: application/octet-stream" \
             "https://api.github.com/repos/${github_repo}/releases/assets/${asset_id}" \
@@ -121,6 +138,14 @@ download_file() {
         if [[ -s "${output}" ]]; then return 0; fi
     fi
 
+    # 方法3: CDN
+    echo -e "  Downloading via CDN..."
+    local url
+    if [[ -n "${ver}" ]]; then
+        url="https://github.com/${github_repo}/releases/download/v${ver}/${name}"
+    else
+        url="https://github.com/${github_repo}/releases/latest/download/${name}"
+    fi
     if command -v wget &>/dev/null; then
         wget --no-check-certificate -q --show-progress -O "${output}" "${url}" 2>/dev/null || true
     else
@@ -137,11 +162,7 @@ mkdir -p "${install_dir}"
 # Download agent binary
 echo -e "  Downloading agent..."
 binary_name="nexus-agent-linux-${arch}"
-last_version=$(get_latest_version)
-if [[ -n "${last_version}" ]]; then
-    echo -e "  Version: ${green}${last_version}${plain}"
-fi
-if download_file "${binary_name}" "${install_dir}/nexus-agent" "${last_version}"; then
+if download_file "${binary_name}" "${install_dir}/nexus-agent"; then
     chmod +x "${install_dir}/nexus-agent"
     echo -e "  Agent: ${green}OK${plain}"
 else
@@ -152,13 +173,13 @@ fi
 # Download ns CLI
 echo -e "  Downloading ns CLI..."
 ns_binary_name="ns-linux-${arch}"
-if download_file "${ns_binary_name}" "${install_dir}/ns" "${last_version}"; then
+if download_file "${ns_binary_name}" "${install_dir}/ns"; then
     chmod +x "${install_dir}/ns"
     echo -e "  ns CLI: ${green}OK${plain}"
 else
     echo -e "  ns CLI: ${yellow}skipped${plain}"
 fi
-ln -sf "${install_dir}/ns" /usr/local/bin/ns
+ln -sf "${install_dir}/ns" /usr/local/bin/ns 2>/dev/null || true
 
 # Create agent.yaml using ns bind
 "${install_dir}/ns" bind \
@@ -182,7 +203,7 @@ depend() { need net; }
 SVCEOF
     chmod +x /etc/init.d/nexus-agent
     rc-update add nexus-agent default
-    service nexus-agent start 2>/dev/null
+    rc-service nexus-agent start 2>/dev/null
 else
     cat << SVCEOF > /etc/systemd/system/nexus-agent.service
 [Unit]

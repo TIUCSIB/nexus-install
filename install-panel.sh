@@ -56,7 +56,7 @@ get_latest_version() {
     fi
     # 方法2: API
     if [[ -z "${ver}" ]]; then
-        ver=$(curl -sL "https://api.github.com/repos/${github_repo}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null || true)
+        ver=$(curl -sL "https://api.github.com/repos/${github_repo}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/' 2>/dev/null || true)
     fi
     echo "${ver}"
 }
@@ -65,36 +65,46 @@ get_latest_version() {
 download_file() {
     local name="$1"      # 文件名，如 nexus-linux-amd64
     local output="$2"    # 输出路径
-    local name_ver="${name}"
     local ver="${version:-$(get_latest_version)}"
 
     if [[ -n "${ver}" ]]; then
         echo -e "  Version: ${green}${ver}${plain}"
-        name_ver="${name}"
+    else
+        echo -e "  Version: ${yellow}latest${plain}"
     fi
 
-    local url="https://github.com/${github_repo}/releases/download/${ver}/${name_ver}"
-
-    # 方法1: gh CLI 下载（最可靠）
+    # 方法1: gh CLI 下载（最可靠，无需登录）
     if command -v gh &>/dev/null; then
         echo -e "  Downloading via gh CLI..."
-        if gh release download "${ver}" -R "${github_repo}" -p "${name_ver}" -O "${output}" --clobber 2>/dev/null; then
-            if [[ -s "${output}" ]]; then
-                chmod +x "${output}" 2>/dev/null || true
-                return 0
-            fi
+        if [[ -n "${ver}" ]]; then
+            gh release download "${ver}" -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null
+        else
+            gh release download -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null
+        fi
+        if [[ $? -eq 0 && -s "${output}" ]]; then
+            echo -e "  ${green}OK${plain}"
+            chmod +x "${output}" 2>/dev/null || true
+            return 0
         fi
     fi
 
-    # 方法2: API 下载（需认证，但公开仓库也可以）
+    # 方法2: API 下载
     echo -e "  Downloading via API..."
-    local api_url="https://api.github.com/repos/${github_repo}/releases/tags/${ver}"
-    local asset_id=$(curl -sL "${api_url}" | grep -A20 "\"name\": \"${name_ver}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/' 2>/dev/null || true)
+    local api_url asset_id
+    if [[ -n "${ver}" ]]; then
+        api_url="https://api.github.com/repos/${github_repo}/releases/tags/v${ver}"
+        asset_id=$(curl -sL "${api_url}" 2>/dev/null | grep -A20 "\"name\": \"${name}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/')
+    fi
+    if [[ -z "${asset_id}" ]]; then
+        api_url="https://api.github.com/repos/${github_repo}/releases/latest"
+        asset_id=$(curl -sL "${api_url}" 2>/dev/null | grep -A20 "\"name\": \"${name}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/')
+    fi
     if [[ -n "${asset_id}" ]]; then
         curl -sL -H "Accept: application/octet-stream" \
             "https://api.github.com/repos/${github_repo}/releases/assets/${asset_id}" \
             -o "${output}" 2>/dev/null || true
         if [[ -s "${output}" ]]; then
+            echo -e "  ${green}OK${plain}"
             chmod +x "${output}" 2>/dev/null || true
             return 0
         fi
@@ -102,12 +112,19 @@ download_file() {
 
     # 方法3: 直接 CDN URL 下载（最不稳定）
     echo -e "  Downloading via CDN..."
+    local url
+    if [[ -n "${ver}" ]]; then
+        url="https://github.com/${github_repo}/releases/download/v${ver}/${name}"
+    else
+        url="https://github.com/${github_repo}/releases/latest/download/${name}"
+    fi
     if command -v wget &>/dev/null; then
         wget --no-check-certificate -q --show-progress -O "${output}" "${url}" 2>/dev/null || true
     else
         curl -sL -o "${output}" "${url}" 2>/dev/null || true
     fi
     if [[ -s "${output}" ]]; then
+        echo -e "  ${green}OK${plain}"
         chmod +x "${output}" 2>/dev/null || true
         return 0
     fi
