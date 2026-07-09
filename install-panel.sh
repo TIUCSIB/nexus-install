@@ -18,7 +18,7 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --port)  port="$2"; shift 2 ;;
         --dir)   install_dir="$2"; shift 2 ;;
-        *)       shift ;;
+        *)       version="$1"; shift ;;
     esac
 done
 
@@ -47,11 +47,81 @@ echo -e "  Port:   ${green}${port}${plain}"
 echo -e "  Dir:    ${green}${install_dir}${plain}"
 echo ""
 
+# 获取最新版本号
+get_latest_version() {
+    local ver=""
+    # 方法1: gh CLI
+    if command -v gh &>/dev/null; then
+        ver=$(gh release list -R "${github_repo}" --json tagName -q '.[0].tagName' 2>/dev/null || true)
+    fi
+    # 方法2: API
+    if [[ -z "${ver}" ]]; then
+        ver=$(curl -sL "https://api.github.com/repos/${github_repo}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null || true)
+    fi
+    echo "${ver}"
+}
+
+# 下载文件（多种方式，按优先级）
+download_file() {
+    local name="$1"      # 文件名，如 nexus-linux-amd64
+    local output="$2"    # 输出路径
+    local name_ver="${name}"
+    local ver="${version:-$(get_latest_version)}"
+
+    if [[ -n "${ver}" ]]; then
+        echo -e "  Version: ${green}${ver}${plain}"
+        name_ver="${name}"
+    fi
+
+    local url="https://github.com/${github_repo}/releases/download/${ver}/${name_ver}"
+
+    # 方法1: gh CLI 下载（最可靠）
+    if command -v gh &>/dev/null; then
+        echo -e "  Downloading via gh CLI..."
+        if gh release download "${ver}" -R "${github_repo}" -p "${name_ver}" -O "${output}" --clobber 2>/dev/null; then
+            if [[ -s "${output}" ]]; then
+                chmod +x "${output}" 2>/dev/null || true
+                return 0
+            fi
+        fi
+    fi
+
+    # 方法2: API 下载（需认证，但公开仓库也可以）
+    echo -e "  Downloading via API..."
+    local api_url="https://api.github.com/repos/${github_repo}/releases/tags/${ver}"
+    local asset_id=$(curl -sL "${api_url}" | grep -A20 "\"name\": \"${name_ver}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/' 2>/dev/null || true)
+    if [[ -n "${asset_id}" ]]; then
+        curl -sL -H "Accept: application/octet-stream" \
+            "https://api.github.com/repos/${github_repo}/releases/assets/${asset_id}" \
+            -o "${output}" 2>/dev/null || true
+        if [[ -s "${output}" ]]; then
+            chmod +x "${output}" 2>/dev/null || true
+            return 0
+        fi
+    fi
+
+    # 方法3: 直接 CDN URL 下载（最不稳定）
+    echo -e "  Downloading via CDN..."
+    if command -v wget &>/dev/null; then
+        wget --no-check-certificate -q --show-progress -O "${output}" "${url}" 2>/dev/null || true
+    else
+        curl -sL -o "${output}" "${url}" 2>/dev/null || true
+    fi
+    if [[ -s "${output}" ]]; then
+        chmod +x "${output}" 2>/dev/null || true
+        return 0
+    fi
+
+    # 全部失败
+    rm -f "${output}" 2>/dev/null || true
+    return 1
+}
+
 install_deps() {
     if [[ x"${release}" == x"centos" ]]; then
         yum install -y wget curl ca-certificates >/dev/null 2>&1
     elif [[ x"${release}" == x"alpine" ]]; then
-        apk add --no-cache wget curl ca-certificates >/dev/null 2>&1
+        apk add --no-cache wget curl ca-certificates unzip github-cli >/dev/null 2>&1
     else
         apt-get update -y >/dev/null 2>&1
         apt-get install -y wget curl ca-certificates unzip >/dev/null 2>&1
@@ -59,36 +129,25 @@ install_deps() {
 }
 
 download_binary() {
-    local ver=$1
     local name="nexus-linux-${arch}"
-    local url=""
-    if [[ -n "${ver}" ]]; then
-        url="https://github.com/${github_repo}/releases/download/${ver}/${name}"
+    echo -e "  Downloading ${name}..."
+    if download_file "${name}" "${install_dir}/nexus"; then
+        chmod +x "${install_dir}/nexus"
+        echo -e "  Binary: ${green}OK${plain}"
     else
-        ver=$(curl -Ls "https://api.github.com/repos/${github_repo}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-        if [[ -n "${ver}" ]]; then
-            echo -e "  Version: ${green}${ver}${plain}"
-            url="https://github.com/${github_repo}/releases/download/${ver}/${name}"
-        else
-            url="https://github.com/${github_repo}/releases/latest/download/${name}"
-        fi
+        echo -e "  Binary: ${red}FAILED${plain}"
+        echo -e "  ${yellow}Tip: 请手动安装 github-cli 后重试${plain}"
+        echo -e "  ${yellow}Alpine: apk add github-cli${plain}"
+        echo -e "  ${yellow}Debian: apt install gh${plain}"
+        echo -e "  ${yellow}CentOS: yum install gh${plain}"
+        exit 1
     fi
-    echo -e "  Downloading binary..."
-    wget --no-check-certificate -q --show-progress -O "${install_dir}/nexus" "${url}"
-    chmod +x "${install_dir}/nexus"
 }
 
 download_web() {
-    local ver=$1
-    local url=""
-    if [[ -n "${ver}" ]]; then
-        url="https://github.com/${github_repo}/releases/download/${ver}/web-dist.zip"
-    else
-        url="https://github.com/${github_repo}/releases/latest/download/web-dist.zip"
-    fi
+    local name="web-dist.zip"
     echo -e "  Downloading web assets..."
-    wget --no-check-certificate -q -O "${install_dir}/web-dist.zip" "${url}" 2>/dev/null
-    if [[ $? -eq 0 ]]; then
+    if download_file "${name}" "${install_dir}/web-dist.zip"; then
         mkdir -p "${install_dir}/web/dist"
         unzip -o "${install_dir}/web-dist.zip" -d "${install_dir}/web/dist" >/dev/null 2>&1
         rm -f "${install_dir}/web-dist.zip"
@@ -177,10 +236,10 @@ echo -e "${yellow}[2/6]${plain} Directories..."
 mkdir -p "${install_dir}/data" "${install_dir}/web/dist"
 
 echo -e "${yellow}[3/6]${plain} Binary..."
-download_binary "$1"
+download_binary
 
 echo -e "${yellow}[4/6]${plain} Web assets..."
-download_web "$1"
+download_web
 
 echo -e "${yellow}[5/6]${plain} Config..."
 create_config
@@ -193,9 +252,9 @@ if [[ -n "$2" && -n "$3" ]]; then
     "${install_dir}/nexus" -config "${install_dir}/config.yaml" -admin-email "$2" -admin-pass "$3"
 fi
 
-if [[ x"${release}" == x"alpine" ]]; then service nexus start 2>/dev/null
+if [[ x"${release}" == x"alpine" ]]; then rc-service nexus start 2>/dev/null
 else systemctl start nexus 2>/dev/null; fi
-sleep 1
+sleep 2
 
 server_ip=$(curl -s4 ifconfig.me 2>/dev/null || curl -s ip.sb 2>/dev/null || echo "YOUR_IP")
 
@@ -207,7 +266,6 @@ echo ""
 echo -e "  URL:     ${cyan}http://${server_ip}:${port}${plain}"
 echo -e "  Login:   ${yellow}admin@nexus.com / 12345678${plain}"
 echo ""
-echo -e "  systemctl start/stop/restart nexus"
-echo -e "  journalctl -u nexus -f"
+echo -e "  rc-service nexus start/stop/restart"
 echo ""
 cd "${cur_dir}"
