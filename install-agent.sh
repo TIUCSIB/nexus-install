@@ -10,7 +10,7 @@ cyan='\033[0;36m'
 plain='\033[0m'
 
 install_dir="/opt/nexus-agent"
-github_repo="TIUCSIB/nexus-install"
+github_repo="TIUCSIB/nexus"
 panel_url=""
 token=""
 node_id=""

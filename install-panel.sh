@@ -11,7 +11,7 @@ plain='\033[0m'
 
 cur_dir=$(pwd)
 install_dir="/opt/nexus"
-github_repo="TIUCSIB/nexus-install"
+github_repo="TIUCSIB/nexus"
 port=6100
 
 while [[ $# -gt 0 ]]; do
