@@ -87,29 +87,77 @@ else
     echo -e "  sing-box: ${green}installed${plain}"
 fi
 
+# 获取最新版本号（多种方式）
+get_latest_version() {
+    local ver=""
+    if command -v gh &>/dev/null; then
+        ver=$(gh release list -R "${github_repo}" --json tagName -q '.[0].tagName' 2>/dev/null || true)
+    fi
+    if [[ -z "${ver}" ]]; then
+        ver=$(curl -sL "https://api.github.com/repos/${github_repo}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null || true)
+    fi
+    echo "${ver}"
+}
+
+# 下载文件（多种方式）
+download_file() {
+    local name="$1"
+    local output="$2"
+    local ver="${3:-$(get_latest_version)}"
+    local url="https://github.com/${github_repo}/releases/download/${ver}/${name}"
+
+    if command -v gh &>/dev/null; then
+        if gh release download "${ver}" -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null; then
+            if [[ -s "${output}" ]]; then return 0; fi
+        fi
+    fi
+
+    local api_url="https://api.github.com/repos/${github_repo}/releases/tags/${ver}"
+    local asset_id=$(curl -sL "${api_url}" | grep -A20 "\"name\": \"${name}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/' 2>/dev/null || true)
+    if [[ -n "${asset_id}" ]]; then
+        curl -sL -H "Accept: application/octet-stream" \
+            "https://api.github.com/repos/${github_repo}/releases/assets/${asset_id}" \
+            -o "${output}" 2>/dev/null || true
+        if [[ -s "${output}" ]]; then return 0; fi
+    fi
+
+    if command -v wget &>/dev/null; then
+        wget --no-check-certificate -q --show-progress -O "${output}" "${url}" 2>/dev/null || true
+    else
+        curl -sL -o "${output}" "${url}" 2>/dev/null || true
+    fi
+    if [[ -s "${output}" ]]; then return 0; fi
+
+    rm -f "${output}" 2>/dev/null || true
+    return 1
+}
+
 mkdir -p "${install_dir}"
 
 # Download agent binary
 echo -e "  Downloading agent..."
 binary_name="nexus-agent-linux-${arch}"
-last_version=$(curl -Ls "https://api.github.com/repos/${github_repo}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+last_version=$(get_latest_version)
 if [[ -n "${last_version}" ]]; then
     echo -e "  Version: ${green}${last_version}${plain}"
-    wget --no-check-certificate -q --show-progress -O "${install_dir}/nexus-agent" "https://github.com/${github_repo}/releases/download/${last_version}/${binary_name}"
-else
-    wget --no-check-certificate -q --show-progress -O "${install_dir}/nexus-agent" "https://github.com/${github_repo}/releases/latest/download/${binary_name}"
 fi
-chmod +x "${install_dir}/nexus-agent"
+if download_file "${binary_name}" "${install_dir}/nexus-agent" "${last_version}"; then
+    chmod +x "${install_dir}/nexus-agent"
+    echo -e "  Agent: ${green}OK${plain}"
+else
+    echo -e "  Agent: ${red}FAILED${plain}"
+    exit 1
+fi
 
 # Download ns CLI
 echo -e "  Downloading ns CLI..."
 ns_binary_name="ns-linux-${arch}"
-if [[ -n "${last_version}" ]]; then
-    wget --no-check-certificate -q --show-progress -O "${install_dir}/ns" "https://github.com/${github_repo}/releases/download/${last_version}/${ns_binary_name}"
+if download_file "${ns_binary_name}" "${install_dir}/ns" "${last_version}"; then
+    chmod +x "${install_dir}/ns"
+    echo -e "  ns CLI: ${green}OK${plain}"
 else
-    wget --no-check-certificate -q --show-progress -O "${install_dir}/ns" "https://github.com/${github_repo}/releases/latest/download/${ns_binary_name}"
+    echo -e "  ns CLI: ${yellow}skipped${plain}"
 fi
-chmod +x "${install_dir}/ns"
 ln -sf "${install_dir}/ns" /usr/local/bin/ns
 
 # Create agent.yaml using ns bind
