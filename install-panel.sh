@@ -78,40 +78,61 @@ download_file() {
     local auth_header
     auth_header=$(get_auth_header)
 
+    echo -e "  Downloading ${name}..."
+
     # 获取版本信息
-    local api_headers="Accept: application/vnd.github.v3+json"
-    if [[ -n "${auth_header}" ]]; then
-        api_headers="${api_headers}"$'\r\n'"${auth_header}"
+    local ver=""
+    if command -v gh &>/dev/null; then
+        ver=$(gh release list -R "${github_repo}" --json tagName -q '.[0].tagName' 2>/dev/null || true)
+    fi
+    if [[ -z "${ver}" ]]; then
+        ver=$(curl -sL "https://api.github.com/repos/${github_repo}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/' 2>/dev/null || true)
+    fi
+    if [[ -n "${ver}" ]]; then
+        echo -e "  Version: ${green}v${ver}${plain}"
     fi
 
-    echo -e "  Downloading ${name}..."
-    echo -e "  ${yellow}Note: 私有仓库需要 GitHub Token${plain}"
-    echo -e "  ${yellow}      创建: https://github.com/settings/tokens${plain}"
-    echo ""
+    # 方法1: CDN 直链下载（公开仓库可用）
+    echo -e "  Trying CDN..."
+    local url
+    if [[ -n "${ver}" ]]; then
+        url="https://github.com/${github_repo}/releases/download/v${ver}/${name}"
+    else
+        url="https://github.com/${github_repo}/releases/latest/download/${name}"
+    fi
+    if command -v wget &>/dev/null; then
+        wget --no-check-certificate -q --show-progress -O "${output}" "${url}" 2>/dev/null || true
+    else
+        curl -sL -o "${output}" "${url}" 2>/dev/null || true
+    fi
+    if [[ -s "${output}" ]]; then
+        echo -e "  ${green}OK (CDN)${plain}"
+        chmod +x "${output}" 2>/dev/null || true
+        return 0
+    fi
 
-    # 方法1: gh CLI 下载
+    # 方法2: gh CLI 下载
     if command -v gh &>/dev/null; then
         echo -e "  Trying gh CLI..."
-        if gh release download -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null; then
-            if [[ -s "${output}" ]]; then
-                echo -e "  ${green}OK (gh)${plain}"
-                chmod +x "${output}" 2>/dev/null || true
-                return 0
-            fi
+        if [[ -n "${ver}" ]]; then
+            gh release download "v${ver}" -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null
+        else
+            gh release download -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null
+        fi
+        if [[ $? -eq 0 && -s "${output}" ]]; then
+            echo -e "  ${green}OK (gh)${plain}"
+            chmod +x "${output}" 2>/dev/null || true
+            return 0
         fi
     fi
 
-    # 方法2: API 下载（带认证）
+    # 方法3: API 下载（带认证，私有仓库用）
     if [[ -n "${auth_header}" ]]; then
         echo -e "  Trying API..."
-        # 获取最新 release 信息
         local release_data=$(curl -sL -H "${auth_header}" -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/${github_repo}/releases/latest" 2>/dev/null)
-        local ver=$(echo "${release_data}" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
         local asset_id=$(echo "${release_data}" | grep -A20 "\"name\": \"${name}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/')
-
         if [[ -n "${asset_id}" ]]; then
-            echo -e "  Version: ${green}v${ver}${plain}"
             curl -sL -H "${auth_header}" -H "Accept: application/octet-stream" \
                 "https://api.github.com/repos/${github_repo}/releases/assets/${asset_id}" \
                 -o "${output}" 2>/dev/null || true
@@ -124,19 +145,6 @@ download_file() {
     fi
 
     # 全部失败
-    echo -e "  ${red}FAILED${plain}"
-    echo ""
-    echo -e "  ${yellow}解决方案:${plain}"
-    echo -e "  ${yellow}1. 创建 GitHub Token:${plain}"
-    echo -e "     ${cyan}https://github.com/settings/tokens${plain}"
-    echo -e "     (勾选 repo 权限, 或 Fine-grained: Contents: Read + Metadata: Read)"
-    echo ""
-    echo -e "  ${yellow}2. 重新安装时带上 token:${plain}"
-    echo -e "     ${cyan}bash install-panel.sh --port ${port} --token ghp_xxxx${plain}"
-    echo ""
-    echo -e "  ${yellow}3. 或者设置环境变量:${plain}"
-    echo -e "     ${cyan}export GH_TOKEN=ghp_xxxx${plain}"
-    echo -e "     ${cyan}bash install-panel.sh --port ${port}${plain}"
     rm -f "${output}" 2>/dev/null || true
     return 1
 }
@@ -147,6 +155,9 @@ download_binary() {
         chmod +x "${install_dir}/nexus"
         echo -e "  Binary: ${green}OK${plain}"
     else
+        echo -e "  Binary: ${red}FAILED${plain}"
+        echo -e "  ${yellow}无法下载 ${name}${plain}"
+        echo -e "  ${yellow}请检查网络连接后重试${plain}"
         exit 1
     fi
 }
