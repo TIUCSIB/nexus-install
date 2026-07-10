@@ -71,6 +71,20 @@ get_auth_header() {
     fi
 }
 
+# 验证下载的文件是否有效
+is_valid_file() {
+    local file="$1"
+    local size
+    size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo "0")
+    # 太小肯定不对
+    [[ "${size}" -gt 100000 ]] || return 1
+    local magic
+    magic=$(head -c 4 "$file" 2>/dev/null)
+    # ELF 二进制 或 ZIP 文件
+    [[ "${magic}" == $'\x7fELF' || "${magic}" == "PK"* ]] && return 0
+    return 1
+}
+
 # 下载文件（带认证）
 download_file() {
     local name="$1"
@@ -101,15 +115,11 @@ download_file() {
         url="https://github.com/${github_repo}/releases/latest/download/${name}"
     fi
     if command -v wget &>/dev/null; then
-        wget --no-check-certificate -q --show-progress -O "${output}" "${url}" 2>/dev/null || true
+        wget --no-check-certificate -q --show-progress -O "${output}" "${url}" 2>&1 | tail -3 || true
     else
         curl -sL -o "${output}" "${url}" 2>/dev/null || true
     fi
-    if [[ -s "${output}" ]]; then
-        echo -e "  ${green}OK (CDN)${plain}"
-        chmod +x "${output}" 2>/dev/null || true
-        return 0
-    fi
+    if is_valid_file "${output}" 2>/dev/null; then echo ""; return 0; fi
 
     # 方法2: gh CLI 下载
     if command -v gh &>/dev/null; then
@@ -119,11 +129,7 @@ download_file() {
         else
             gh release download -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null
         fi
-        if [[ $? -eq 0 && -s "${output}" ]]; then
-            echo -e "  ${green}OK (gh)${plain}"
-            chmod +x "${output}" 2>/dev/null || true
-            return 0
-        fi
+        if is_valid_file "${output}" 2>/dev/null; then return 0; fi
     fi
 
     # 方法3: API 下载（带认证，私有仓库用）
@@ -136,11 +142,7 @@ download_file() {
             curl -sL -H "${auth_header}" -H "Accept: application/octet-stream" \
                 "https://api.github.com/repos/${github_repo}/releases/assets/${asset_id}" \
                 -o "${output}" 2>/dev/null || true
-            if [[ -s "${output}" ]]; then
-                echo -e "  ${green}OK (API)${plain}"
-                chmod +x "${output}" 2>/dev/null || true
-                return 0
-            fi
+            if is_valid_file "${output}" 2>/dev/null; then return 0; fi
         fi
     fi
 
