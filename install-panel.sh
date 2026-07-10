@@ -51,12 +51,12 @@ echo ""
 
 install_deps() {
     if [[ x"${release}" == x"centos" ]]; then
-        yum install -y wget curl ca-certificates unzip >/dev/null 2>&1
+        yum install -y wget curl ca-certificates unzip 2>&1 | tail -1
     elif [[ x"${release}" == x"alpine" ]]; then
-        apk add --no-cache wget curl ca-certificates unzip github-cli >/dev/null 2>&1
+        apk add --no-cache wget curl ca-certificates unzip 2>&1 | tail -1
     else
-        apt-get update -y >/dev/null 2>&1
-        apt-get install -y wget curl ca-certificates unzip >/dev/null 2>&1
+        apt-get update -y 2>&1 | tail -1
+        apt-get install -y wget curl ca-certificates unzip 2>&1 | tail -1
     fi
 }
 
@@ -164,9 +164,10 @@ download_binary() {
 
 download_web() {
     local name="web-dist.zip"
+    echo -e "  Downloading web assets..."
     if download_file "${name}" "${install_dir}/web-dist.zip"; then
         mkdir -p "${install_dir}/web/dist"
-        unzip -o "${install_dir}/web-dist.zip" -d "${install_dir}/web/dist" >/dev/null 2>&1
+        unzip -o "${install_dir}/web-dist.zip" -d "${install_dir}/web/dist" >/dev/null 2>&1 || true
         rm -f "${install_dir}/web-dist.zip"
         echo -e "  Web: ${green}OK${plain}"
     else
