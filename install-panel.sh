@@ -223,12 +223,18 @@ command="/opt/nexus/nexus"
 command_args="-config /opt/nexus/config.yaml"
 command_background=true
 pidfile="/var/run/${SVCNAME}.pid"
-command_user="root"
 
 depend() { need net; }
 
-start_pre() {
-    mkdir -p /var/run
+start() {
+    cd /opt/nexus
+    start-stop-daemon --start --background \
+        --make-pidfile --pidfile "${pidfile}" \
+        --exec "${command}" -- ${command_args}
+}
+
+stop() {
+    start-stop-daemon --stop --pidfile "${pidfile}" --retry 15
 }
 SVCEOF
         chmod +x /etc/init.d/nexus
