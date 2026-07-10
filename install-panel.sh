@@ -218,10 +218,18 @@ create_service() {
         cat << 'SVCEOF' > /etc/init.d/nexus
 #!/sbin/openrc-run
 name="nexus"
+description="Nexus Panel"
 command="/opt/nexus/nexus"
 command_args="-config /opt/nexus/config.yaml"
-command_background="yes"
+command_background=true
+pidfile="/var/run/${SVCNAME}.pid"
+command_user="root"
+
 depend() { need net; }
+
+start_pre() {
+    mkdir -p /var/run
+}
 SVCEOF
         chmod +x /etc/init.d/nexus
         rc-update add nexus default
