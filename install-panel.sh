@@ -1,6 +1,6 @@
 #!/bin/bash
 # Nexus Panel Installer
-# Usage: bash <(curl -fsSL https://raw.githubusercontent.com/TIUCSIB/nexus-install/master/install-panel.sh) [--port 6100]
+# Usage: bash install-panel.sh [--port 6100] [--token GITHUB_TOKEN]
 set -e
 
 red='\033[0;31m'
@@ -13,12 +13,14 @@ cur_dir=$(pwd)
 install_dir="/opt/nexus"
 github_repo="TIUCSIB/nexus"
 port=6100
+github_token=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --port)  port="$2"; shift 2 ;;
         --dir)   install_dir="$2"; shift 2 ;;
-        *)       version="$1"; shift ;;
+        --token) github_token="$2"; shift 2 ;;
+        *)       shift ;;
     esac
 done
 
@@ -47,96 +49,9 @@ echo -e "  Port:   ${green}${port}${plain}"
 echo -e "  Dir:    ${green}${install_dir}${plain}"
 echo ""
 
-# 获取最新版本号
-get_latest_version() {
-    local ver=""
-    # 方法1: gh CLI
-    if command -v gh &>/dev/null; then
-        ver=$(gh release list -R "${github_repo}" --json tagName -q '.[0].tagName' 2>/dev/null || true)
-    fi
-    # 方法2: API
-    if [[ -z "${ver}" ]]; then
-        ver=$(curl -sL "https://api.github.com/repos/${github_repo}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/' 2>/dev/null || true)
-    fi
-    echo "${ver}"
-}
-
-# 下载文件（多种方式，按优先级）
-download_file() {
-    local name="$1"      # 文件名，如 nexus-linux-amd64
-    local output="$2"    # 输出路径
-    local ver="${version:-$(get_latest_version)}"
-
-    if [[ -n "${ver}" ]]; then
-        echo -e "  Version: ${green}${ver}${plain}"
-    else
-        echo -e "  Version: ${yellow}latest${plain}"
-    fi
-
-    # 方法1: gh CLI 下载（最可靠，无需登录）
-    if command -v gh &>/dev/null; then
-        echo -e "  Downloading via gh CLI..."
-        if [[ -n "${ver}" ]]; then
-            gh release download "${ver}" -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null
-        else
-            gh release download -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null
-        fi
-        if [[ $? -eq 0 && -s "${output}" ]]; then
-            echo -e "  ${green}OK${plain}"
-            chmod +x "${output}" 2>/dev/null || true
-            return 0
-        fi
-    fi
-
-    # 方法2: API 下载
-    echo -e "  Downloading via API..."
-    local api_url asset_id
-    if [[ -n "${ver}" ]]; then
-        api_url="https://api.github.com/repos/${github_repo}/releases/tags/v${ver}"
-        asset_id=$(curl -sL "${api_url}" 2>/dev/null | grep -A20 "\"name\": \"${name}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/')
-    fi
-    if [[ -z "${asset_id}" ]]; then
-        api_url="https://api.github.com/repos/${github_repo}/releases/latest"
-        asset_id=$(curl -sL "${api_url}" 2>/dev/null | grep -A20 "\"name\": \"${name}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/')
-    fi
-    if [[ -n "${asset_id}" ]]; then
-        curl -sL -H "Accept: application/octet-stream" \
-            "https://api.github.com/repos/${github_repo}/releases/assets/${asset_id}" \
-            -o "${output}" 2>/dev/null || true
-        if [[ -s "${output}" ]]; then
-            echo -e "  ${green}OK${plain}"
-            chmod +x "${output}" 2>/dev/null || true
-            return 0
-        fi
-    fi
-
-    # 方法3: 直接 CDN URL 下载（最不稳定）
-    echo -e "  Downloading via CDN..."
-    local url
-    if [[ -n "${ver}" ]]; then
-        url="https://github.com/${github_repo}/releases/download/v${ver}/${name}"
-    else
-        url="https://github.com/${github_repo}/releases/latest/download/${name}"
-    fi
-    if command -v wget &>/dev/null; then
-        wget --no-check-certificate -q --show-progress -O "${output}" "${url}" 2>/dev/null || true
-    else
-        curl -sL -o "${output}" "${url}" 2>/dev/null || true
-    fi
-    if [[ -s "${output}" ]]; then
-        echo -e "  ${green}OK${plain}"
-        chmod +x "${output}" 2>/dev/null || true
-        return 0
-    fi
-
-    # 全部失败
-    rm -f "${output}" 2>/dev/null || true
-    return 1
-}
-
 install_deps() {
     if [[ x"${release}" == x"centos" ]]; then
-        yum install -y wget curl ca-certificates >/dev/null 2>&1
+        yum install -y wget curl ca-certificates unzip >/dev/null 2>&1
     elif [[ x"${release}" == x"alpine" ]]; then
         apk add --no-cache wget curl ca-certificates unzip github-cli >/dev/null 2>&1
     else
@@ -145,25 +60,99 @@ install_deps() {
     fi
 }
 
+# 获取认证头
+get_auth_header() {
+    if [[ -n "${github_token}" ]]; then
+        echo "Authorization: Bearer ${github_token}"
+    elif command -v gh &>/dev/null && gh auth status 2>/dev/null; then
+        echo "Authorization: Bearer $(gh auth token 2>/dev/null)"
+    else
+        echo ""
+    fi
+}
+
+# 下载文件（带认证）
+download_file() {
+    local name="$1"
+    local output="$2"
+    local auth_header
+    auth_header=$(get_auth_header)
+
+    # 获取版本信息
+    local api_headers="Accept: application/vnd.github.v3+json"
+    if [[ -n "${auth_header}" ]]; then
+        api_headers="${api_headers}"$'\r\n'"${auth_header}"
+    fi
+
+    echo -e "  Downloading ${name}..."
+    echo -e "  ${yellow}Note: 私有仓库需要 GitHub Token${plain}"
+    echo -e "  ${yellow}      创建: https://github.com/settings/tokens${plain}"
+    echo ""
+
+    # 方法1: gh CLI 下载
+    if command -v gh &>/dev/null; then
+        echo -e "  Trying gh CLI..."
+        if gh release download -R "${github_repo}" -p "${name}" -O "${output}" --clobber 2>/dev/null; then
+            if [[ -s "${output}" ]]; then
+                echo -e "  ${green}OK (gh)${plain}"
+                chmod +x "${output}" 2>/dev/null || true
+                return 0
+            fi
+        fi
+    fi
+
+    # 方法2: API 下载（带认证）
+    if [[ -n "${auth_header}" ]]; then
+        echo -e "  Trying API..."
+        # 获取最新 release 信息
+        local release_data=$(curl -sL -H "${auth_header}" -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${github_repo}/releases/latest" 2>/dev/null)
+        local ver=$(echo "${release_data}" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+        local asset_id=$(echo "${release_data}" | grep -A20 "\"name\": \"${name}\"" | grep '"id"' | head -1 | sed -E 's/.*"id": ([0-9]+).*/\1/')
+
+        if [[ -n "${asset_id}" ]]; then
+            echo -e "  Version: ${green}v${ver}${plain}"
+            curl -sL -H "${auth_header}" -H "Accept: application/octet-stream" \
+                "https://api.github.com/repos/${github_repo}/releases/assets/${asset_id}" \
+                -o "${output}" 2>/dev/null || true
+            if [[ -s "${output}" ]]; then
+                echo -e "  ${green}OK (API)${plain}"
+                chmod +x "${output}" 2>/dev/null || true
+                return 0
+            fi
+        fi
+    fi
+
+    # 全部失败
+    echo -e "  ${red}FAILED${plain}"
+    echo ""
+    echo -e "  ${yellow}解决方案:${plain}"
+    echo -e "  ${yellow}1. 创建 GitHub Token:${plain}"
+    echo -e "     ${cyan}https://github.com/settings/tokens${plain}"
+    echo -e "     (勾选 repo 权限, 或 Fine-grained: Contents: Read + Metadata: Read)"
+    echo ""
+    echo -e "  ${yellow}2. 重新安装时带上 token:${plain}"
+    echo -e "     ${cyan}bash install-panel.sh --port ${port} --token ghp_xxxx${plain}"
+    echo ""
+    echo -e "  ${yellow}3. 或者设置环境变量:${plain}"
+    echo -e "     ${cyan}export GH_TOKEN=ghp_xxxx${plain}"
+    echo -e "     ${cyan}bash install-panel.sh --port ${port}${plain}"
+    rm -f "${output}" 2>/dev/null || true
+    return 1
+}
+
 download_binary() {
     local name="nexus-linux-${arch}"
-    echo -e "  Downloading ${name}..."
     if download_file "${name}" "${install_dir}/nexus"; then
         chmod +x "${install_dir}/nexus"
         echo -e "  Binary: ${green}OK${plain}"
     else
-        echo -e "  Binary: ${red}FAILED${plain}"
-        echo -e "  ${yellow}Tip: 请手动安装 github-cli 后重试${plain}"
-        echo -e "  ${yellow}Alpine: apk add github-cli${plain}"
-        echo -e "  ${yellow}Debian: apt install gh${plain}"
-        echo -e "  ${yellow}CentOS: yum install gh${plain}"
         exit 1
     fi
 }
 
 download_web() {
     local name="web-dist.zip"
-    echo -e "  Downloading web assets..."
     if download_file "${name}" "${install_dir}/web-dist.zip"; then
         mkdir -p "${install_dir}/web/dist"
         unzip -o "${install_dir}/web-dist.zip" -d "${install_dir}/web/dist" >/dev/null 2>&1
@@ -263,11 +252,6 @@ create_config
 
 echo -e "${yellow}[6/6]${plain} Service..."
 create_service
-
-if [[ -n "$2" && -n "$3" ]]; then
-    echo -e "  Admin: $2"
-    "${install_dir}/nexus" -config "${install_dir}/config.yaml" -admin-email "$2" -admin-pass "$3"
-fi
 
 if [[ x"${release}" == x"alpine" ]]; then rc-service nexus start 2>/dev/null
 else systemctl start nexus 2>/dev/null; fi
