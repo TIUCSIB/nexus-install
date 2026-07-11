@@ -213,6 +213,8 @@ command_args="-c ${install_dir}/agent.yaml"
 command_background="yes"
 directory="${install_dir}"
 pidfile="/run/nexus-agent.pid"
+output_log="${install_dir}/agent.log"
+error_log="${install_dir}/agent.err"
 depend() { need net; }
 SVCEOF
     chmod +x /etc/init.d/nexus-agent
