@@ -209,7 +209,7 @@ if [[ x"${release}" == x"alpine" ]]; then
 #!/sbin/openrc-run
 name="nexus-agent"
 command="${install_dir}/nexus-agent"
-command_args="-config ${install_dir}/agent.yaml"
+command_args="-c ${install_dir}/agent.yaml"
 command_background="yes"
 directory="${install_dir}"
 pidfile="/run/nexus-agent.pid"
@@ -227,7 +227,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=${install_dir}
-ExecStart=${install_dir}/nexus-agent -config ${install_dir}/agent.yaml
+ExecStart=${install_dir}/nexus-agent -c ${install_dir}/agent.yaml
 Restart=always
 RestartSec=5
 
