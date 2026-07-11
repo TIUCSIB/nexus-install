@@ -211,6 +211,8 @@ name="nexus-agent"
 command="${install_dir}/nexus-agent"
 command_args="-config ${install_dir}/agent.yaml"
 command_background="yes"
+directory="${install_dir}"
+pidfile="/run/nexus-agent.pid"
 depend() { need net; }
 SVCEOF
     chmod +x /etc/init.d/nexus-agent
@@ -224,6 +226,7 @@ After=network.target
 
 [Service]
 Type=simple
+WorkingDirectory=${install_dir}
 ExecStart=${install_dir}/nexus-agent -config ${install_dir}/agent.yaml
 Restart=always
 RestartSec=5
